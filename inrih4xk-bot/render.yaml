@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: inrih4xk-bot
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    disk:
+      name: bot-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: SESSION_DIR
+        value: /var/data/session
+      - key: DATA_DIR
+        value: /var/data/data
+      - key: BOT_NAME
+        value: INRIH4XK
+      - key: OWNER_NUMBER
+        sync: false
+      - key: ADMIN_KEY
+        generateValue: true

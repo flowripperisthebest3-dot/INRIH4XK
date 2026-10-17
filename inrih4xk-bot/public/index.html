@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Link your WhatsApp</title>
+<style>
+:root{--bg:#0b0f14;--card:#121923;--line:#223042;--tx:#e6edf3;--mut:#8b9bb0;--ac:#25d366;--bad:#ff6b6b}
+@media (prefers-color-scheme:light){:root{--bg:#f2f5f8;--card:#fff;--line:#d6dee8;--tx:#10202f;--mut:#5b6b7c}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:16px;background:var(--bg);color:var(--tx);font:16px/1.5 system-ui,Segoe UI,Roboto,sans-serif}
+.card{width:100%;max-width:440px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:24px}
+h1{margin:0 0 4px;font-size:24px}p{margin:6px 0}.mut{color:var(--mut);font-size:14px}
+label{display:block;margin:16px 0 6px;font-weight:600}
+input[type=tel]{width:100%;padding:12px;font-size:18px;border-radius:10px;border:1px solid var(--line);background:transparent;color:inherit}
+.chk{display:flex;gap:10px;align-items:flex-start;margin:16px 0;font-size:14px;color:var(--mut)}
+.chk input{margin-top:4px}
+button{width:100%;padding:13px;border:0;border-radius:10px;background:var(--ac);color:#04210f;font-size:16px;font-weight:700;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+.err{color:var(--bad);margin-top:12px;font-size:14px;min-height:20px}
+.code{font:700 38px/1.2 ui-monospace,Menlo,monospace;letter-spacing:5px;text-align:center;color:var(--ac);margin:12px 0;user-select:all}
+ol{padding-left:20px;margin:12px 0}li{margin:6px 0}
+.ok{color:var(--ac);font-weight:700;text-align:center;font-size:18px}
+.sec{background:transparent;border:1px solid var(--line);color:inherit;margin-top:8px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1 id="name">Link your WhatsApp</h1>
+  <p class="mut">Enter your number to get a pairing code. No QR code needed.</p>
+
+  <div id="closed" hidden><p class="err">Linking is closed right now. Please try again later.</p></div>
+
+  <div id="form">
+    <label for="num">Your WhatsApp number</label>
+    <input id="num" type="tel" inputmode="numeric" placeholder="2348012345678" autocomplete="tel">
+    <p class="mut">Include your country code. No +, spaces, or leading 0. Nigeria example: 234 801 234 5678.</p>
+    <label class="chk"><input id="consent" type="checkbox"><span>I understand this links my WhatsApp to this bot as a <b>linked device</b>. The server can send and receive messages for my number while linked, and I can unlink at any time from WhatsApp &rarr; Linked devices.</span></label>
+    <button id="go">Get my code</button>
+    <div id="err" class="err"></div>
+  </div>
+
+  <div id="result" hidden>
+    <p>Your pairing code:</p>
+    <div class="code" id="code"></div>
+    <button class="sec" id="copy">Copy code</button>
+    <ol>
+      <li>Open <b>WhatsApp</b> on your phone</li>
+      <li>Go to <b>Settings &rarr; Linked devices &rarr; Link a device</b></li>
+      <li>Tap <b>Link with phone number instead</b></li>
+      <li>Enter the code above</li>
+    </ol>
+    <p class="mut" id="wait">Waiting for you to enter the code…</p>
+    <p class="ok" id="done" hidden>✅ Connected! Send .menu to your own chat to try it.</p>
+    <button class="sec" id="again" hidden>Link another number</button>
+  </div>
+</div>
+<script>
+const $ = (s) => document.querySelector(s);
+let poll;
+fetch('/api/status').then((r) => r.json()).then((j) => {
+  $('#name').textContent = j.botName;
+  document.title = 'Link your WhatsApp - ' + j.botName;
+  if (!j.open) { $('#closed').hidden = false; $('#form').hidden = true; }
+}).catch(() => {});
+
+$('#go').onclick = async () => {
+  const err = $('#err'); err.textContent = '';
+  const number = $('#num').value.replace(/\D/g, '');
+  if (number.startsWith('0')) return err.textContent = 'Remove the leading 0 and add your country code (e.g. 234…).';
+  if (number.length < 8) return err.textContent = 'Enter your full number with country code.';
+  if (!$('#consent').checked) return err.textContent = 'Please tick the box to continue.';
+  $('#go').disabled = true; $('#go').textContent = 'Requesting code…';
+  try {
+    const r = await fetch('/api/pair', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ number, consent: true }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Something went wrong');
+    $('#code').textContent = j.code;
+    $('#form').hidden = true; $('#result').hidden = false;
+    clearInterval(poll);
+    poll = setInterval(async () => {
+      try {
+        const s = await (await fetch('/api/pair/status?token=' + j.token)).json();
+        if (s.state === 'connected') { clearInterval(poll); $('#wait').hidden = true; $('#done').hidden = false; $('#again').hidden = false; }
+        if (s.state === 'expired') { clearInterval(poll); $('#wait').textContent = 'Code expired. Request a new one.'; $('#again').hidden = false; }
+      } catch {}
+    }, 3000);
+  } catch (e) {
+    err.textContent = e.message;
+  } finally {
+    $('#go').disabled = false; $('#go').textContent = 'Get my code';
+  }
+};
+$('#copy').onclick = () => { navigator.clipboard?.writeText($('#code').textContent); $('#copy').textContent = 'Copied ✓'; };
+$('#again').onclick = () => location.reload();
+</script>
+</body>
+</html>

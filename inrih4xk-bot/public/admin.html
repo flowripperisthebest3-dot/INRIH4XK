@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Admin panel</title>
+<style>
+:root{--bg:#0b0f14;--card:#121923;--line:#223042;--tx:#e6edf3;--mut:#8b9bb0;--ac:#25d366;--bad:#ff5d5d;--warn:#f5b73b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)}
+nav{display:flex;gap:6px;flex-wrap:wrap;padding:10px 16px;max-width:1100px;margin:auto}
+button,input,select,textarea{font:inherit;color:inherit;background:#0e141c;border:1px solid var(--line);border-radius:8px;padding:7px 10px}
+button{cursor:pointer;background:#17212d}button:hover{border-color:var(--ac)}
+button.p{background:var(--ac);color:#04210f;border-color:var(--ac);font-weight:700}
+button.d{border-color:var(--bad);color:var(--bad)}button.on{border-color:var(--ac);color:var(--ac)}
+main{padding:0 16px 40px;max-width:1100px;margin:auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin:12px 0}
+h3{margin:0 0 8px}table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:middle}th{color:var(--mut);font-weight:500}
+.tw{overflow-x:auto}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.stat b{display:block;font-size:22px}.mut{color:var(--mut)}.row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.badge{padding:2px 8px;border-radius:99px;font-size:12px;border:1px solid var(--line)}
+.open{color:var(--ac);border-color:var(--ac)}.pairing,.reconnecting,.starting,.connecting{color:var(--warn);border-color:var(--warn)}.stopped,.replaced{color:var(--bad);border-color:var(--bad)}
+pre{background:#080b10;border:1px solid var(--line);border-radius:8px;padding:10px;max-height:480px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12px}
+label{display:block;margin:10px 0 4px;color:var(--mut)}textarea{width:100%;min-height:70px}
+input[type=text],input[type=password],input[type=number],select{width:100%}
+.code{font:700 30px/1.2 ui-monospace,monospace;letter-spacing:4px;color:var(--ac)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:700px){.two{grid-template-columns:1fr}}
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#1d2a3a;border:1px solid var(--line);padding:10px 14px;border-radius:10px;z-index:9;max-width:90vw}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div id="login" style="max-width:380px;margin:12vh auto;padding:16px">
+  <div class="card">
+    <h3>Admin login</h3>
+    <label>Admin key</label>
+    <input id="key" type="password" autocomplete="current-password">
+    <p class="mut" id="lerr" style="color:var(--bad)"></p>
+    <button class="p" id="lgo">Sign in</button>
+  </div>
+</div>
+
+<div id="app" hidden>
+  <header><b id="title">Admin</b><button id="out">Sign out</button></header>
+  <nav id="nav"></nav>
+  <main id="view"></main>
+</div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const TABS = [['dash', 'Dashboard'], ['nums', 'Numbers'], ['add', 'Add number'], ['set', 'Settings'], ['logs', 'Logs']];
+let KEY = sessionStorage.getItem('k') || '', tab = 'dash', logTimer = null, pollTimer = null;
+
+function toast(m) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = m; document.body.appendChild(t); setTimeout(() => t.remove(), 3500); }
+async function api(p, method = 'GET', body) {
+  const r = await fetch('/api/admin' + p, { method, headers: { 'x-admin-key': KEY, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401) { signOut(); throw new Error(j.error || 'Unauthorized'); }
+  if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+  return j;
+}
+const ago = (t) => { const s = Math.floor((Date.now() - t) / 1000); return s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : s < 86400 ? Math.floor(s / 3600) + 'h' : Math.floor(s / 86400) + 'd'; };
+const dur = (s) => { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60); return `${d}d ${h}h ${m}m`; };
+const act = async (fn, ok) => { try { await fn(); if (ok) toast(ok); } catch (e) { toast('⚠️ ' + e.message); } };
+
+async function signIn() {
+  KEY = $('#key').value;
+  try { await api('/login', 'POST', {}); sessionStorage.setItem('k', KEY); showApp(); }
+  catch (e) { $('#lerr').textContent = e.message; }
+}
+function signOut() { sessionStorage.removeItem('k'); KEY = ''; clearInterval(logTimer); clearInterval(pollTimer); $('#app').hidden = true; $('#login').hidden = false; }
+function showApp() {
+  $('#login').hidden = true; $('#app').hidden = false;
+  $('#nav').innerHTML = TABS.map(([k, n]) => `<button data-tab="${k}">${n}</button>`).join('');
+  go(tab);
+}
+async function go(t) {
+  tab = t; clearInterval(logTimer); clearInterval(pollTimer);
+  document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
+  try { await ({ dash: dash, nums: nums, add: addNum, set: settings, logs: logsTab }[t])(); } catch (e) { $('#view').innerHTML = `<div class="card">${esc(e.message)}</div>`; }
+}
+
+async function dash() {
+  const o = await api('/overview');
+  $('#title').textContent = o.botName + ' - Admin';
+  const on = o.sessions.filter((s) => s.status === 'open').length;
+  const sent = o.sessions.reduce((a, s) => a + s.stats.sentTotal, 0);
+  $('#view').innerHTML = `<div class="grid">
+    <div class="card stat"><span class="mut">Connected</span><b>${on} / ${o.sessions.length}</b></div>
+    <div class="card stat"><span class="mut">Max numbers</span><b>${o.global.maxSessions}</b></div>
+    <div class="card stat"><span class="mut">Messages sent</span><b>${sent}</b></div>
+    <div class="card stat"><span class="mut">Uptime</span><b>${dur(o.uptime)}</b></div>
+    <div class="card stat"><span class="mut">Memory</span><b>${o.memMB} MB</b></div>
+    <div class="card stat"><span class="mut">Linking page</span><b>${o.global.pairingOpen ? 'Open' : 'Closed'}</b></div></div>
+    <div class="card"><h3>Quick actions</h3><div class="row">
+      <button data-a="toggle-pair">${o.global.pairingOpen ? 'Close' : 'Open'} public linking</button>
+      <button class="d" data-a="restart-server">Restart server</button></div>
+      <p class="mut">Node ${esc(o.node)}. Restart relies on your host (Railway/Render) bringing the service back up.</p></div>`;
+}
+
+async function nums() {
+  const o = await api('/overview');
+  const rows = o.sessions.map((s) => `<tr>
+    <td><b>${esc(s.id)}</b></td><td><span class="badge ${esc(s.status)}">${esc(s.status)}</span></td>
+    <td>${esc(s.mode)}</td><td>${s.stats.sentTotal}</td><td>${s.connectedAt ? ago(s.connectedAt) : '-'}</td>
+    <td><div class="row">
+      <button data-a="manage" data-id="${esc(s.id)}">Manage</button>
+      <button data-a="restart" data-id="${esc(s.id)}">Restart</button>
+      <button data-a="${s.status === 'stopped' ? 'start' : 'stop'}" data-id="${esc(s.id)}">${s.status === 'stopped' ? 'Start' : 'Stop'}</button>
+      <button class="d" data-a="logout" data-id="${esc(s.id)}">Unlink</button>
+      <button class="d" data-a="delete" data-id="${esc(s.id)}">Delete</button></div></td></tr>`).join('');
+  $('#view').innerHTML = `<div class="card"><h3>Linked numbers (${o.sessions.length})</h3><div class="tw"><table>
+    <tr><th>Number</th><th>Status</th><th>Mode</th><th>Sent</th><th>Up</th><th></th></tr>${rows || '<tr><td colspan="6" class="mut">No numbers linked yet.</td></tr>'}</table></div>
+    <p class="mut">Unlink = log the number out of WhatsApp and delete its session. Delete = remove the session files only.</p></div><div id="manage"></div>`;
+}
+
+async function manage(id) {
+  const [s, g] = await Promise.all([api('/session/' + id), Promise.resolve()]);
+  $('#manage').innerHTML = `<div class="card" id="mp"><h3>Manage ${esc(id)} <span class="badge ${esc(s.status)}">${esc(s.status)}</span></h3>
+    <div class="two"><div>
+      <label>Mode</label><select id="m-mode"><option value="public">public (everyone)</option><option value="self">self (owner only)</option></select>
+      <label>Prefix</label><input id="m-prefix" type="text" maxlength="3" value="${esc(s.settings.prefix)}" placeholder="default">
+      <label>Banned numbers (one per line)</label><textarea id="m-ban">${esc(s.settings.banned.join('\n'))}</textarea>
+      <label>Anti-link groups (group ids, one per line)</label><textarea id="m-al">${esc(s.settings.antilink.join('\n'))}</textarea>
+      <p><button class="p" data-a="save-settings" data-id="${esc(id)}">Save settings</button></p></div>
+    <div><h3>Anti-ban stats</h3><pre>${esc(JSON.stringify(s.stats, null, 2))}</pre>
+      <h3>Send a message</h3><label>To (number or group id)</label><input id="s-to" type="text" placeholder="2348012345678">
+      <label>Text</label><textarea id="s-text"></textarea>
+      <p><button data-a="send" data-id="${esc(id)}">Send</button> <span class="mut">goes through the anti-ban queue</span></p></div></div>
+    <h3>Groups</h3><p><button data-a="groups" data-id="${esc(id)}">Load groups</button></p><div id="groups"></div></div>`;
+  $('#m-mode').value = s.settings.mode;
+  $('#mp').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function loadGroups(id) {
+  const gs = await api(`/session/${id}/groups`);
+  $('#groups').innerHTML = `<div class="tw"><table><tr><th>Group</th><th>Members</th><th></th></tr>${gs.map((g) => `<tr><td>${esc(g.subject)}<div class="mut">${esc(g.id)}</div></td><td>${g.size}</td>
+    <td><div class="row"><button data-a="g-members" data-id="${esc(id)}" data-g="${esc(g.id)}">Members</button>
+    <button data-a="g-mute" data-id="${esc(id)}" data-g="${esc(g.id)}">Mute</button>
+    <button data-a="g-unmute" data-id="${esc(id)}" data-g="${esc(g.id)}">Unmute</button>
+    <button data-a="g-link" data-id="${esc(id)}" data-g="${esc(g.id)}">Link</button>
+    <button class="d" data-a="g-leave" data-id="${esc(id)}" data-g="${esc(g.id)}">Leave</button></div></td></tr>`).join('') || '<tr><td colspan="3" class="mut">No groups.</td></tr>'}</table></div><div id="members"></div>`;
+}
+async function loadMembers(id, gid) {
+  const m = await api(`/session/${id}/group/${encodeURIComponent(gid)}`);
+  $('#members').innerHTML = `<h3>${esc(m.subject)} members</h3><div class="tw"><table>${m.participants.map((p) => `<tr><td>${esc((p.jid || p.id).split('@')[0])}</td><td>${p.admin ? '<span class="badge open">' + esc(p.admin) + '</span>' : ''}</td>
+    <td><div class="row"><button data-a="p-promote" data-id="${esc(id)}" data-g="${esc(gid)}" data-p="${esc(p.id)}">Promote</button>
+    <button data-a="p-demote" data-id="${esc(id)}" data-g="${esc(gid)}" data-p="${esc(p.id)}">Demote</button>
+    <button class="d" data-a="p-remove" data-id="${esc(id)}" data-g="${esc(gid)}" data-p="${esc(p.id)}">Remove</button></div></td></tr>`).join('')}</table></div>`;
+}
+
+async function addNum() {
+  $('#view').innerHTML = `<div class="card"><h3>Link a number (admin)</h3>
+    <label>WhatsApp number (country code, digits only)</label><input id="a-num" type="text" placeholder="2348012345678">
+    <p><button class="p" data-a="add-go">Get pairing code</button></p><div id="a-out"></div></div>
+    <div class="card"><h3>Public linking page</h3><p>Share this link so people can link their own numbers:</p><p class="code" style="font-size:16px;letter-spacing:0">${esc(location.origin)}/</p></div>`;
+}
+
+async function settings() {
+  const o = await api('/overview'), g = o.global, a = g.antiban;
+  $('#view').innerHTML = `<div class="card"><h3>Global settings</h3><div class="two"><div>
+    <label><input type="checkbox" id="g-open" ${g.pairingOpen ? 'checked' : ''}> Public linking page open</label>
+    <label>Max linked numbers</label><input id="g-max" type="number" min="1" max="100" value="${g.maxSessions}">
+    <label>Numbers blocked from linking (one per line)</label><textarea id="g-bl">${esc(g.blocked.join('\n'))}</textarea></div>
+    <div><h3>Anti-ban limits (live, per number)</h3>
+    <label>Min delay before a reply (ms)</label><input id="g-min" type="number" value="${a.minDelayMs}">
+    <label>Max delay before a reply (ms)</label><input id="g-max2" type="number" value="${a.maxDelayMs}">
+    <label>Max messages per minute</label><input id="g-pm" type="number" value="${a.maxPerMinute}">
+    <label>Per-user cooldown (ms)</label><input id="g-cd" type="number" value="${a.userCooldownMs}"></div></div>
+    <p><button class="p" data-a="save-global">Save</button></p>
+    <p class="mut">Lowering the delays or raising the message cap increases ban risk.</p></div>`;
+}
+
+async function logsTab() {
+  const draw = async () => {
+    const l = await api('/logs');
+    const el = $('#logbox'); if (!el) return;
+    const stick = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
+    el.textContent = l.map((x) => `${new Date(x.t).toLocaleTimeString()} ${x.level === 'log' ? '' : '[' + x.level + '] '}${x.msg}`).join('\n');
+    if (stick) el.scrollTop = el.scrollHeight;
+  };
+  $('#view').innerHTML = `<div class="card"><h3>Server logs</h3><pre id="logbox">Loading…</pre><p class="mut">Refreshes every 5 seconds.</p></div>`;
+  await draw(); logTimer = setInterval(() => draw().catch(() => {}), 5000);
+}
+
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-tab],[data-a]'); if (!t) return;
+  if (t.dataset.tab) return go(t.dataset.tab);
+  const { a, id, g, p } = t.dataset;
+  const L = (s) => $(s).value.split('\n').map((x) => x.trim()).filter(Boolean);
+  const refresh = () => go(tab);
+  act(async () => {
+    if (a === 'manage') return manage(id);
+    if (['restart', 'start', 'stop'].includes(a)) { await api(`/session/${id}/${a}`, 'POST', {}); return refresh(); }
+    if (a === 'logout' || a === 'delete') {
+      if (!confirm(a === 'logout' ? `Unlink ${id} from WhatsApp and delete its session?` : `Delete the session for ${id}?`)) return;
+      await api(`/session/${id}/${a}`, 'POST', {}); return refresh();
+    }
+    if (a === 'save-settings') { await api(`/session/${id}/settings`, 'POST', { mode: $('#m-mode').value, prefix: $('#m-prefix').value, banned: L('#m-ban'), antilink: L('#m-al') }); }
+    if (a === 'send') { await api(`/session/${id}/send`, 'POST', { to: $('#s-to').value, text: $('#s-text').value }); $('#s-text').value = ''; }
+    if (a === 'groups') return loadGroups(id);
+    if (a === 'g-members') return loadMembers(id, g);
+    if (['g-mute', 'g-unmute', 'g-leave'].includes(a)) { if (a === 'g-leave' && !confirm('Leave this group?')) return; await api(`/session/${id}/group/${encodeURIComponent(g)}/${a.slice(2)}`, 'POST', {}); return a === 'g-leave' ? loadGroups(id) : undefined; }
+    if (a === 'g-link') { const r = await api(`/session/${id}/group/${encodeURIComponent(g)}/link`, 'POST', {}); return prompt('Invite link', r.link); }
+    if (a.startsWith('p-')) { if (a === 'p-remove' && !confirm('Remove this member?')) return; await api(`/session/${id}/group/${encodeURIComponent(g)}/${a.slice(2)}`, 'POST', { participant: p }); return loadMembers(id, g); }
+    if (a === 'toggle-pair') { const o = await api('/overview'); await api('/global', 'POST', { pairingOpen: !o.global.pairingOpen }); return refresh(); }
+    if (a === 'restart-server') { if (!confirm('Restart the whole server?')) return; await api('/server/restart', 'POST', {}); return toast('Restarting… reload in ~30s'); }
+    if (a === 'add-go') {
+      const r = await api('/pair', 'POST', { number: $('#a-num').value.replace(/\D/g, '') });
+      $('#a-out').innerHTML = `<p>Enter this code in WhatsApp &rarr; Linked devices &rarr; Link with phone number:</p><p class="code">${esc(r.code)}</p><p class="mut" id="a-st">Waiting…</p>`;
+      pollTimer = setInterval(async () => { try { const s = await (await fetch('/api/pair/status?token=' + r.token)).json(); const el = $('#a-st'); if (!el) return clearInterval(pollTimer); if (s.state === 'connected') { el.textContent = '✅ Connected'; clearInterval(pollTimer); } if (s.state === 'expired') { el.textContent = 'Expired'; clearInterval(pollTimer); } } catch {} }, 3000);
+      return;
+    }
+    if (a === 'save-global') {
+      await api('/global', 'POST', { pairingOpen: $('#g-open').checked, maxSessions: $('#g-max').value, blocked: L('#g-bl'),
+        antiban: { minDelayMs: $('#g-min').value, maxDelayMs: $('#g-max2').value, maxPerMinute: $('#g-pm').value, userCooldownMs: $('#g-cd').value } });
+      return settings();
+    }
+  }, ['save-settings', 'send', 'save-global', 'g-mute', 'g-unmute', 'p-promote', 'p-demote', 'p-remove'].includes(a) ? 'Done ✓' : '');
+});
+$('#lgo').onclick = signIn;
+$('#key').onkeydown = (e) => { if (e.key === 'Enter') signIn(); };
+$('#out').onclick = signOut;
+if (KEY) api('/login', 'POST', {}).then(showApp).catch(() => {});
+</script>
+</body>
+</html>
